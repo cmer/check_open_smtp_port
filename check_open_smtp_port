@@ -1,0 +1,83 @@
+#!/usr/bin/env ruby
+
+require 'resolv'
+
+module CheckOpenSmtpPort
+  PORT = 25
+  TRIES = 3
+  FILE = File.join(__dir__, "top-1m.csv")
+
+  def self.test_connectivity
+    tries = 0
+    is_open = false
+
+    while !is_open && tries <= TRIES do
+      mx = random_mx_host
+      print mx + ": "
+      is_open = port_open?(mx, PORT)
+      puts "port #{PORT} is #{is_open ? 'OPEN' : 'closed'}"
+      tries += 1
+    end
+
+    is_open
+  end
+
+  def self.port_open?(host, port)
+    Socket.tcp(host, port, connect_timeout: 3) { true } || false
+  rescue Errno::ETIMEDOUT, Errno::ECONNREFUSED, Errno::EHOSTUNREACH
+    false
+  end
+
+  def self.random_mx_host
+    mx = nil
+    while mx == nil do
+      domain = random_domain
+      mx = mx_for(domain)
+    end
+    mx
+  end
+
+  def self.random_domain
+    random_line(FILE).split(',').last.chomp
+  end
+
+  def self.mx_for(domain)
+    get_all_mx(domain).first
+  end
+
+  def self.random_line(filename)
+    blocksize, line = 1024, ""
+    File.open(filename) do |file|
+      initial_position = rand(File.size(filename)-1)+1 # random pointer position. Not a line number!
+      pos = Array.new(2).fill( initial_position ) # array [prev_position, current_position]
+      # Find beginning of current line
+      begin
+        pos.push([pos[1]-blocksize, 0].max).shift # calc new position
+        file.pos = pos[1] # move pointer backward within file
+        offset = (n = file.read(pos[0] - pos[1]).rindex(/\n/) ) ? n+1 : nil
+      end until pos[1] == 0 || offset
+      file.pos = pos[1] + offset.to_i
+      # Collect line text till the end
+      begin
+        data = file.read(blocksize)
+        line.concat((p = data.index(/\n/)) ? data[0,p.to_i] : data)
+      end until file.eof? or p
+    end
+    line
+  end
+
+  def self.get_all_mx(domain)
+    mx = Resolv::DNS.open do |dns|
+      ress = dns.getresources(domain, Resolv::DNS::Resource::IN::MX)
+      ress.map { |r| r.exchange.to_s }
+    end
+    return mx
+  end
+end
+
+
+if CheckOpenSmtpPort::test_connectivity
+  exit 0
+else
+  exit 1
+end
